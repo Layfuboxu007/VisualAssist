@@ -17,7 +17,7 @@ def load_config(config_path="config.yaml"):
 
 def main():
     print("===========================================")
-    print("SmartVision: Beta Framework Initialization")
+    print("SightAssist: Beta Framework Initialization")
     print("===========================================")
 
     # 1. Load Configurations
@@ -32,7 +32,8 @@ def main():
     # 2. Initialize Audio Feedback
     audio_cfg = config.get("audio", {})
     audio = AudioFeedback(rate=audio_cfg.get("speech_rate", 150),
-                          volume=audio_cfg.get("volume", 1.0))
+                          volume=audio_cfg.get("volume", 1.0),
+                          cooldown=audio_cfg.get("cooldown", 3.0))
     
     # 3. Initialize YOLO Vision Module
     ai_cfg = config.get("ai", {})
@@ -45,10 +46,9 @@ def main():
     except Exception as e:
         print(f"[ERROR] Failed to initialize YOLO: {e}")
         vision_module = None
-
     
     # We use a synchronous speak here just so it's fully heard before the loop starts
-    audio.speak_sync("Smart Vision framework initializing.")
+    audio.speak_sync("SightAssist framework initializing.")
 
     # 3. Initialize Camera
     cam_cfg = config.get("cameras", {})
@@ -74,26 +74,50 @@ def main():
 
             # AI processing steps
             if vision_module:
-                annotated_frame, objects, infer_ms, fps = vision_module.process_frame(frame)
+                annotated_frame, obstacles, infer_ms, fps = vision_module.process_frame(frame)
                 
-                # Check for "person" or critical obstacles to speak
-                if "person" in objects:  # simple detection trigger for testing
-                    audio.speak("Person ahead.")
+                # Define obstacle warning priority (higher = more critical)
+                label_priority = {
+                    "hole": 10,
+                    "person": 9,
+                    "vehicle": 8,
+                    "tricycle": 7,
+                    "bicycle": 6,
+                    "pole": 5
+                }
+                
+                def get_priority(obs):
+                    lbl_score = label_priority.get(obs["label"], 1)
+                    pos_score = 2 if obs["position"] == "ahead" else 1
+                    return lbl_score * pos_score
+
+                # Sort obstacles so the most critical items are spoken first
+                sorted_obstacles = sorted(obstacles, key=get_priority, reverse=True)
+                
+                for obs in sorted_obstacles:
+                    label = obs["label"]
+                    position = obs["position"]
+                    if position == "ahead":
+                        alert_phrase = f"{label.capitalize()} ahead."
+                    else:
+                        alert_phrase = f"{label.capitalize()} {position}."
+                    
+                    audio.speak(alert_phrase)
                     
                 display_frame = annotated_frame
-                # Draw FPS Performance
-                cv2.putText(display_frame, f"Backend: {vision_module.backend.upper()} | FPS: {fps:.1f} | ms: {infer_ms:.1f}",
+                # Draw FPS Performance (removed PyTorch backend string)
+                cv2.putText(display_frame, f"FPS: {fps:.1f} | ms: {infer_ms:.1f}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             else:
                 display_frame = frame.copy()
-                cv2.putText(display_frame, "SmartVision Beta", (10, 30), 
+                cv2.putText(display_frame, "SightAssist Beta", (10, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             cv2.putText(display_frame, "Press 'Q' to Quit", (10, 70), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             # Display the resulting frame
-            cv2.imshow('SmartVision Beta', display_frame)
+            cv2.imshow('SightAssist Beta', display_frame)
 
             # Check for quit key
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -108,7 +132,7 @@ def main():
         print("[MAIN] Cleaning up resources...")
         camera.release()
         cv2.destroyAllWindows()
-        audio.speak_sync("Smart vision system shutting down.")
+        audio.speak_sync("SightAssist system shutting down.")
         print("[MAIN] Shutdown complete.")
 
 if __name__ == "__main__":

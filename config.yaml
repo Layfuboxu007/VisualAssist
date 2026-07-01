@@ -1,12 +1,13 @@
 cameras:
-  input_source: 0  # 0 = default webcam. Use [0, 1] for dual-camera (future)
+  input_source: 3  # 2 = OBS Virtual Camera / High-res device
   resolution:
-    width: 640
-    height: 480
+    width: 1280
+    height: 720
 
 audio:
   speech_rate: 150  # Words per minute
   volume: 1.0       # 0.0 to 1.0
+  cooldown: 3.0     # Time (seconds) between repeating same alert
 
 # AI inference settings (YOLO)
 ai:
