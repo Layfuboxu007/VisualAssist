@@ -120,16 +120,24 @@ class FaceRecognizer:
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Optimization: Downscale grayscale image by 2x for fast Haar face detection (4x speedup)
-        scale = 0.5
-        small_gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        # Dynamic scaling based on image width to preserve detail on low-resolution streams
+        h, w = frame.shape[:2]
+        if w > 640:
+            scale = 0.5  # downscale high-res feeds
+        else:
+            scale = 1.0  # keep original size for low-res feeds (e.g. 640x480)
+            
+        if scale != 1.0:
+            small_gray = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        else:
+            small_gray = gray
         
-        # Detect faces with multiscale Haar cascade on downscaled frame
+        # Detect faces with robust Haar cascade configurations
         faces = self.face_cascade.detectMultiScale(
             small_gray, 
-            scaleFactor=1.2, 
-            minNeighbors=5, 
-            minSize=(25, 25)
+            scaleFactor=1.1, 
+            minNeighbors=3, 
+            minSize=(20, 20)
         )
 
         detections = []
@@ -152,10 +160,9 @@ class FaceRecognizer:
             if self.faces_db:
                 embedding = self._get_embedding(face_crop)
                 if embedding is not None:
-                    # If it's a real model embedding (512-dim) vs mock hist (512-dim flattened)
+                    # Cosine similarity matching
                     for reg_name, reg_emb in self.faces_db.items():
                         if len(embedding) == len(reg_emb):
-                            # Cosine similarity
                             dot_prod = np.dot(embedding, reg_emb)
                             norm_a = np.linalg.norm(embedding)
                             norm_b = np.linalg.norm(reg_emb)
@@ -165,18 +172,17 @@ class FaceRecognizer:
                                     max_sim = sim
                                     name = reg_name
                     
-                    # Threshold for face match
-                    threshold = 0.58
+                    # More lenient matching threshold for real-world lighting
+                    threshold = 0.52
                     if max_sim < threshold:
                         name = "Unknown"
                 else:
-                    # FaceNet model not loaded, do color histogram matching fallback
+                    # Fallback logic if FaceNet is disabled
                     if not self.is_ready:
                         hist = cv2.calcHist([face_crop], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
                         curr_emb = cv2.normalize(hist, hist).flatten()
                         for reg_name, reg_emb in self.faces_db.items():
                             if len(curr_emb) == len(reg_emb):
-                                # Histogram correlation
                                 sim = cv2.compareHist(
                                     curr_emb.reshape(8, 8, 8).astype(np.float32), 
                                     reg_emb.reshape(8, 8, 8).astype(np.float32), 

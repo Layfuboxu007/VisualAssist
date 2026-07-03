@@ -212,14 +212,14 @@ def main():
                     if name != "Unknown":
                         last_greet = last_face_greeting.get(name, 0.0)
                         if current_time - last_greet > 12.0:
-                            audio.speak(f"{name} detected")
+                            audio.speak(f"{name} detected", is_critical=True)
                             last_face_greeting[name] = current_time
                             logger.log_event("face_recognition", {"name": name, "confidence": face["confidence"]})
                     else:
                         # Unknown person alert cooldown (15s)
                         last_unknown_greet = last_face_greeting.get("Unknown", 0.0)
                         if current_time - last_unknown_greet > 18.0:
-                            audio.speak("Unknown person detected")
+                            audio.speak("Unknown person detected", is_critical=True)
                             last_face_greeting["Unknown"] = current_time
                             logger.log_event("face_recognition", {"name": "Unknown", "confidence": face["confidence"]})
 
