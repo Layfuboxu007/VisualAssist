@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SightAssist Caregiver Session Report</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary: #5271ff;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --text-main: #f3f4f6;
+            --text-secondary: #9ca3af;
+        }
+        
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }
+        
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: linear-gradient(145deg, rgba(20, 27, 45, 0.9), rgba(10, 15, 25, 0.95));
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            backdrop-filter: blur(10px);
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 25px;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            margin: 0;
+            font-size: 2.2rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #ffffff, var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .report-meta {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            text-align: right;
+        }
+        
+        .status-badge {
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            letter-spacing: 0.05rem;
+            display: inline-block;
+        }
+        
+        .status-secure {
+            background-color: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        
+        .status-danger {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(82, 113, 255, 0.3);
+        }
+        
+        .stat-num {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin: 5px 0;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05rem;
+        }
+        
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-top: 40px;
+            margin-bottom: 15px;
+            color: #ffffff;
+            border-left: 4px solid var(--primary);
+            padding-left: 10px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+        
+        th {
+            background-color: rgba(255,255,255,0.02);
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-align: left;
+            padding: 12px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+        
+        tr:hover {
+            background-color: rgba(255,255,255,0.01);
+        }
+        
+        .table-danger-row {
+            background-color: rgba(239, 68, 68, 0.05);
+        }
+        
+        .table-danger-row:hover {
+            background-color: rgba(239, 68, 68, 0.08);
+        }
+        
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+            color: var(--text-main);
+        }
+        
+        li {
+            margin-bottom: 8px;
+        }
+        
+        .rec-box {
+            background-color: rgba(82, 113, 255, 0.05);
+            border: 1px solid rgba(82, 113, 255, 0.15);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+        
+        .rec-box li {
+            color: #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>SightAssist Caregiver Report</h1>
+                <div class="status-badge status-danger" style="margin-top: 8px;">
+                    DANGER / ALERTS
+                </div>
+            </div>
+            <div class="report-meta">
+                <strong>Session Date:</strong> July 03, 2026<br>
+                <strong>Generated At:</strong> 11:20 PM<br>
+                <strong>Start Time:</strong> 11:19:04 PM
+            </div>
+        </header>
+        
+        <div class="grid-3">
+            <div class="stat-card">
+                <div class="stat-label">Session Duration</div>
+                <div class="stat-num" style="color: #ffffff;">1m 33s</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Obstacles Encountered</div>
+                <div class="stat-num">3797</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Critical Proximity Warnings</div>
+                <div class="stat-num" style="color: var(--danger);">1554</div>
+            </div>
+        </div>
+        
+        <div class="section-title">Social Interaction (Faces Recognized)</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Person Name</th>
+                    <th>Frequency Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan='2' class='text-center text-muted'>No registered faces seen during session</td></tr>
+            </tbody>
+        </table>
+        
+        <div class="section-title">Utilities & Context Queries</div>
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px;">
+            <div>
+                <strong style="color: var(--text-secondary);">Text Read (OCR) History:</strong>
+                <table style="font-size: 0.95rem;">
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">Time</th>
+                            <th>Extracted Content</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan='2' class='text-center text-muted'>No text read</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div>
+                <strong style="color: var(--text-secondary);">Colors Identified:</strong>
+                <ul style="margin-top: 15px;">
+                    <li class='text-muted'>No colors identified</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="section-title">Emergency Incident Log</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Alert Time</th>
+                    <th>Trigger Reason</th>
+                    <th>GPS Coordinates</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class='table-danger-row'><td>11:20:25 PM</td><td><strong>Camera Obscured Alert</strong></td><td>14.5995 N, 120.9842 E</td></tr>
+            </tbody>
+        </table>
+        
+        <div class="rec-box">
+            <h3 style="margin-top: 0; color: #ffffff; font-weight: 600;">Caregiver Safety Insights</h3>
+            <ul>
+                <li>User encountered a high frequency of close-proximity obstacles. Recommend clearing indoor path clutter or selecting wider outdoor routes.</li><li>Emergency alarms were triggered. Please inspect the emergency evidence images and verify user's mobility health.</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

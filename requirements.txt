@@ -1,4 +1,16 @@
-opencv-python
-pyyaml
-pyttsx3
-ultralytics
+# =====================================================================
+# SightAssist: Dependency requirements
+# =====================================================================
+# INSTALLATION GUIDE:
+# 1. Install PyTorch first (matching CPU or CUDA compatibility):
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# 2. Install all other requirements:
+#    pip install -r requirements.txt
+# =====================================================================
+
+opencv-python>=4.8.0,<5.0.0
+pyyaml>=6.0
+pyttsx3>=2.90
+ultralytics>=8.0.0
+easyocr>=1.7.0
+facenet-pytorch>=2.5.3

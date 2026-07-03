@@ -94,7 +94,7 @@ class YoloVision:
         box_h = max(1, y2 - y1)
         d_size = (real_h * F) / box_h
         
-        if label == "hole":
+        if label in {"hole", "pothole"}:
             distance = d_ground
         else:
             # We take the minimum of both to be safe and conservative.
@@ -127,7 +127,13 @@ class YoloVision:
     def detect_poles(self, frame, yolo_boxes):
         """Heuristic vertical edge/contour detector to locate vertical poles and posts."""
         h, w = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Optimization: Downscale frame for heuristics to reduce CPU load (4x to 16x speedup)
+        scale = 320.0 / w
+        sh, sw = int(h * scale), 320
+        small_frame = cv2.resize(frame, (sw, sh))
+        
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         
@@ -138,26 +144,50 @@ class YoloVision:
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         poles = []
         
+        # Scale dimensions and coordinates
+        min_ch = 60.0 * scale
+        max_ch = sh * 0.7
+        
+        scaled_yolo_boxes = []
+        for yb in yolo_boxes:
+            scaled_yolo_boxes.append([
+                int(yb[0] * scale),
+                int(yb[1] * scale),
+                int(yb[2] * scale),
+                int(yb[3] * scale)
+            ])
+        
         for contour in contours:
             x, y, cw, ch = cv2.boundingRect(contour)
-            # Poles are vertical, thin and tall, but not extremely thin line borders (like door frames)
-            if ch > 60 and 5 <= cw < 40 and 4.5 < (ch / cw) < 12.0:
-                # Standalone poles on ground must start in mid-to-lower region, and not span the whole image height
-                if y > h * 0.2 and ch < h * 0.7:
-                    if y + ch > h * 0.35 and y < h * 0.85:
+            # Poles are vertical, thin and tall
+            if ch > min_ch and 2 <= cw < (40 * scale) and 4.5 < (ch / cw) < 12.0:
+                if y > sh * 0.2 and ch < max_ch:
+                    if y + ch > sh * 0.35 and y < sh * 0.85:
                         box = [x, y, x + cw, y + ch]
-                        if not self.is_overlapping(box, yolo_boxes):
-                            poles.append(box)
-                            if len(poles) >= 3:  # Limit detections to avoid HUD clutter
+                        if not self.is_overlapping(box, scaled_yolo_boxes):
+                            box_orig = [
+                                int(x / scale),
+                                int(y / scale),
+                                int((x + cw) / scale),
+                                int((y + ch) / scale)
+                            ]
+                            poles.append(box_orig)
+                            if len(poles) >= 3:
                                 break
         return poles
 
     def detect_holes(self, frame, yolo_boxes):
         """Heuristic dark contour detector in the road region to locate potholes or ground openings."""
         h, w = frame.shape[:2]
+        
+        # Optimization: Downscale frame
+        scale = 320.0 / w
+        sh, sw = int(h * scale), 320
+        small_frame = cv2.resize(frame, (sw, sh))
+        
         # Restrict search area to the lower 45% (road plane)
-        road_y_start = int(h * 0.55)
-        road_roi = frame[road_y_start:h, 0:w]
+        road_y_start = int(sh * 0.55)
+        road_roi = small_frame[road_y_start:sh, 0:sw]
         
         if road_roi.size == 0:
             return []
@@ -169,19 +199,17 @@ class YoloVision:
         road_mean = np.mean(blur)
         road_std = np.std(blur)
         
-        # Adjust offset based on hole_sensitivity setting and road standard deviation
-        # Higher standard deviation = more noisy/textured floor -> use larger offset
         if self.hole_sensitivity == "high":
             base_offset = 35
             std_mult = 1.0
         elif self.hole_sensitivity == "low":
-            base_offset = 65  # Increased from 55 to be more conservative
+            base_offset = 65
             std_mult = 2.0
         elif self.hole_sensitivity == "very_low":
             base_offset = 80
             std_mult = 2.5
         else:  # "medium" or default
-            base_offset = 50  # Increased from 45
+            base_offset = 50
             std_mult = 1.5
             
         offset = max(base_offset, int(road_std * std_mult))
@@ -195,41 +223,124 @@ class YoloVision:
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         holes = []
         
+        scaled_yolo_boxes = []
+        for yb in yolo_boxes:
+            scaled_yolo_boxes.append([
+                int(yb[0] * scale),
+                int(yb[1] * scale),
+                int(yb[2] * scale),
+                int(yb[3] * scale)
+            ])
+        
         for contour in contours:
             area = cv2.contourArea(contour)
             x, y, cw, ch = cv2.boundingRect(contour)
             
-            # Filter out wall shadows and side boundaries (like door borders)
-            if x < w * 0.1 or x + cw > w * 0.9:
+            if x < sw * 0.1 or x + cw > sw * 0.9:
                 continue
                 
-            # Dynamic minimum area based on vertical position (closer must be larger to filter small specks)
             y2_full = y + ch + road_y_start
-            y_norm = (y2_full - road_y_start) / (h - road_y_start) if h > road_y_start else 0.0
+            y_norm = (y2_full - road_y_start) / (sh - road_y_start) if sh > road_y_start else 0.0
             y_norm = np.clip(y_norm, 0.0, 1.0)
             
-            # Dynamic min area: from 400 (far) to 2000 (very close)
-            dynamic_min_area = 400 + (y_norm ** 2) * 1600
+            # Scale min area
+            scale_sq = scale ** 2
+            dynamic_min_area = (400 + (y_norm ** 2) * 1600) * scale_sq
+            dynamic_max_area = 8000 * scale_sq
             
-            if dynamic_min_area < area < 8000:
-                # Holes on the ground map as flat horizontal ellipses (width > height) due to perspective
+            # Verify minimum dimensions on small frame
+            if dynamic_min_area < area < dynamic_max_area and cw >= 8 and ch >= 6:
                 aspect_ratio = cw / ch if ch > 0 else 0
-                if 1.4 < aspect_ratio < 4.0:  # Tightened aspect ratio bounds
+                # Strict Aspect Ratio Check (Potholes are round/oval projection, no long lines/borders)
+                if 1.0 <= aspect_ratio <= 2.2:
                     hull = cv2.convexHull(contour)
                     hull_area = cv2.contourArea(hull)
                     solidity = area / hull_area if hull_area > 0 else 0
-                    # A real pothole/opening is solid/convex
-                    if solidity > 0.85:  # Increased from 0.80 to reduce false positives
-                        # Translate ROI coordinates back to full frame
-                        box = [x, y + road_y_start, x + cw, y + ch + road_y_start]
-                        if not self.is_overlapping(box, yolo_boxes):
-                            holes.append(box)
-                            if len(holes) >= 3:
-                                break
+                    
+                    # Strict Solidity Check (Actual potholes are highly defined and convex)
+                    if solidity > 0.92:
+                        # Contrast Check: Pothole center must be significantly darker than surrounding road
+                        mask = np.zeros(gray.shape, dtype=np.uint8)
+                        cv2.drawContours(mask, [contour], -1, 255, -1)
+                        mean_contour_val = cv2.mean(gray, mask=mask)[0]
+                        
+                        if mean_contour_val < road_mean * 0.70:
+                            box_small = [x, y + road_y_start, x + cw, y + ch + road_y_start]
+                            if not self.is_overlapping(box_small, scaled_yolo_boxes):
+                                box_orig = [
+                                    int(box_small[0] / scale),
+                                    int(box_small[1] / scale),
+                                    int(box_small[2] / scale),
+                                    int(box_small[3] / scale)
+                                ]
+                                holes.append(box_orig)
+                                if len(holes) >= 3:
+                                    break
         return holes
 
+    def detect_walls(self, frame, yolo_boxes):
+        """Heuristic wall detector utilizing line segments on left/right frame margins."""
+        h, w = frame.shape[:2]
+        
+        # Optimization: Downscale frame
+        scale = 320.0 / w
+        sh, sw = int(h * scale), 320
+        small_frame = cv2.resize(frame, (sw, sh))
+        
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blur, 40, 120)
+        
+        min_line_len = int(80 * scale)
+        max_line_gap = int(15 * scale)
+        
+        # Detect lines using Probabilistic Hough Transform
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40, minLineLength=min_line_len, maxLineGap=max_line_gap)
+        walls = []
+        
+        scaled_yolo_boxes = []
+        for yb in yolo_boxes:
+            scaled_yolo_boxes.append([
+                int(yb[0] * scale),
+                int(yb[1] * scale),
+                int(yb[2] * scale),
+                int(yb[3] * scale)
+            ])
+        
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                dx = x2 - x1
+                dy = y2 - y1
+                
+                # Near-vertical or steep diagonal lines
+                if abs(dx) < 5 or abs(dy / dx) > 1.2:
+                    mx = (x1 + x2) / 2.0
+                    # Limit to left 25% or right 25% of the frame
+                    if mx < sw * 0.25 or mx > sw * 0.75:
+                        bx1, bx2 = min(x1, x2), max(x1, x2)
+                        by1, by2 = min(y1, y2), max(y1, y2)
+                        
+                        if (bx2 - bx1) < 15 * scale:
+                            bx1 = max(0, bx1 - int(10 * scale))
+                            bx2 = min(sw, bx2 + int(10 * scale))
+                            
+                        box_small = [bx1, by1, bx2, by2]
+                        if not self.is_overlapping(box_small, scaled_yolo_boxes):
+                            box_orig = [
+                                int(bx1 / scale),
+                                int(by1 / scale),
+                                int(bx2 / scale),
+                                int(by2 / scale)
+                            ]
+                            walls.append(box_orig)
+                            if len(walls) >= 2:
+                                break
+        return walls
+
+
     def process_frame(self, frame):
-        """Runs the chosen YOLO model + CV heuristics on a frame, returning the annotated frame and list of obstacles."""
+        """Runs the chosen YOLO model + CV heuristics on a frame, returning the annotated frame, obstacles, and path steering advice."""
         start_time = time.time()
         h, w = frame.shape[:2]
         
@@ -307,7 +418,7 @@ class YoloVision:
                         "distance": dist
                     })
 
-        # 3. Detect custom obstacles (Poles and Holes)
+        # 3. Detect custom obstacles (Poles, Holes, Walls)
         poles = self.detect_poles(frame, yolo_boxes)
         for box in poles:
             pos = self.get_spatial_position(box, w)
@@ -323,16 +434,58 @@ class YoloVision:
         holes = self.detect_holes(frame, yolo_boxes)
         for box in holes:
             pos = self.get_spatial_position(box, w)
-            dist = self.estimate_distance("hole", box, frame.shape)
+            dist = self.estimate_distance("pothole", box, frame.shape)
             detected_obstacles.append({
-                "label": "hole",
+                "label": "pothole",
                 "position": pos,
                 "box": box,
                 "confidence": 0.75,
                 "distance": dist
             })
 
-        # 4. Premium Drawing Overlays
+        walls = self.detect_walls(frame, yolo_boxes)
+        for box in walls:
+            pos = self.get_spatial_position(box, w)
+            dist = self.estimate_distance("wall", box, frame.shape)
+            detected_obstacles.append({
+                "label": "wall",
+                "position": pos,
+                "box": box,
+                "confidence": 0.70,
+                "distance": dist
+            })
+
+        # 4. Path analysis & Navigation advice (Steering heuristics)
+        # Determine if there is a critical threat ahead
+        blocked_ahead = False
+        left_dist = 100.0
+        right_dist = 100.0
+        
+        for obs in detected_obstacles:
+            pos = obs["position"]
+            dist = obs["distance"]
+            if pos == "ahead" and dist < self.critical_threshold:
+                blocked_ahead = True
+            elif pos == "on the left" and dist < left_dist:
+                left_dist = dist
+            elif pos == "on the right" and dist < right_dist:
+                right_dist = dist
+                
+        steer_advice = "clear"
+        if blocked_ahead:
+            # Check which side is clearer
+            if left_dist >= 3.5 and right_dist >= 3.5:
+                # Both clear, steer left by default
+                steer_advice = "steer left"
+            elif left_dist > right_dist:
+                steer_advice = "steer left"
+            elif right_dist > left_dist:
+                steer_advice = "steer right"
+            else:
+                # Both blocked
+                steer_advice = "stop"
+
+        # 5. Premium Drawing Overlays
         annotated_frame = frame.copy()
         color_map = {
             "person": (113, 204, 46),    # Emerald Green (BGR)
@@ -341,7 +494,8 @@ class YoloVision:
             "bicycle": (156, 188, 26),   # Turquoise (BGR)
             "pole": (15, 196, 241),      # Yellow (BGR)
             "hole": (60, 76, 231),       # Red (BGR)
-            "cat": (74, 195, 236)        # Warm Amber/Yellow (BGR)
+            "wall": (240, 16, 240),      # Magenta (BGR)
+            "cat": (74, 195, 236)        # Warm Amber (BGR)
         }
 
         for obs in detected_obstacles:
@@ -350,20 +504,18 @@ class YoloVision:
             x1, y1, x2, y2 = obs["box"]
             dist = obs.get("distance", 99.0)
             
-            # Determine BGR color and thickness based on critical status (distance < self.critical_threshold)
             is_critical = dist < self.critical_threshold
             if is_critical:
                 color = (0, 0, 255)  # Vibrant Warning Red
                 thickness = 3
             else:
-                # For custom/general obstacles, default to a cool Amber/Orange (0, 165, 255)
                 color = color_map.get(label, (0, 165, 255))
                 thickness = 2
             
-            # Standard rectangle outline
+            # Draw standard bounding box
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
             
-            # High-end corner markers
+            # Corner markers for premium HUD aesthetic
             length = min(15, (x2 - x1) // 4, (y2 - y1) // 4)
             if length > 0:
                 cv2.line(annotated_frame, (x1, y1), (x1 + length, y1), color, thickness + 2)
@@ -385,5 +537,5 @@ class YoloVision:
             cv2.putText(annotated_frame, text, (x1 + 3, y1 - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
-        return annotated_frame, detected_obstacles, elapsed_ms, fps
+        return annotated_frame, detected_obstacles, elapsed_ms, fps, steer_advice
 
