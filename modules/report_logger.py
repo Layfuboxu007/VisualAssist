@@ -67,7 +67,7 @@ class ReportLogger:
         timestamp_str = end_datetime.strftime("%Y%m%d_%H%M%S")
         
         # 1. Generate Markdown Report
-        md_filename = f"caregiver_report_{timestamp_str}.md"
+        md_filename = f"guardian_report_{timestamp_str}.md"
         md_path = os.path.join(self.output_dir, md_filename)
         md_content = self._build_markdown(
             duration_sec, total_obstacles, critical_alerts, 
@@ -75,7 +75,7 @@ class ReportLogger:
         )
         
         # 2. Generate HTML Report
-        html_filename = f"caregiver_report_{timestamp_str}.html"
+        html_filename = f"guardian_report_{timestamp_str}.html"
         html_path = os.path.join(self.output_dir, html_filename)
         html_content = self._build_html(
             duration_sec, total_obstacles, critical_alerts, 
@@ -87,7 +87,7 @@ class ReportLogger:
                 f.write(md_content)
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
-            print(f"[LOGGER] Generated caregiver reports:\n - Markdown: {md_path}\n - HTML: {html_path}")
+            print(f"[LOGGER] Generated guardian reports:\n - Markdown: {md_path}\n - HTML: {html_path}")
             return md_path, html_path
         except Exception as e:
             print(f"[LOGGER ERROR] Failed to write reports: {e}")
@@ -113,7 +113,7 @@ class ReportLogger:
         if not emergencies_str:
             emergencies_str = "No emergency conditions encountered."
             
-        # Standard caregiver tips based on logs
+        # Standard guardian tips based on logs
         recs = []
         if critical_alerts > 5:
             recs.append("- User encountered a high frequency of close-proximity obstacles. Recommend clearing indoor path clutter or selecting wider outdoor routes.")
@@ -124,7 +124,7 @@ class ReportLogger:
 
         recs_str = "\n".join(recs)
         
-        return f"""# SightAssist Caregiver Report
+        return f"""# SightAssist Guardian Report
 Generated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}
 
 ## 1. Session Overview
@@ -149,7 +149,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}
 ## 5. Emergency Incident Log
 {emergencies_str}
 
-## 6. Caregiver Recommendations
+## 6. Guardian Recommendations
 {recs_str}
 """
 
@@ -190,7 +190,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SightAssist Caregiver Session Report</title>
+    <title>SightAssist Guardian Session Report</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {{
@@ -384,7 +384,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}
     <div class="container">
         <header>
             <div>
-                <h1>SightAssist Caregiver Report</h1>
+                <h1>SightAssist Guardian Report</h1>
                 <div class="status-badge {status_class}" style="margin-top: 8px;">
                     {status_text}
                 </div>
@@ -463,7 +463,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}
         </table>
         
         <div class="rec-box">
-            <h3 style="margin-top: 0; color: #ffffff; font-weight: 600;">Caregiver Safety Insights</h3>
+            <h3 style="margin-top: 0; color: #ffffff; font-weight: 600;">Guardian Safety Insights</h3>
             <ul>
                 {recs_list}
             </ul>

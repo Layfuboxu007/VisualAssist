@@ -187,6 +187,7 @@ def main():
     print("  'R' - Generate Report On-Demand")
     print("  'W' - Toggle Reading Mode (Continuous Text Reading)")
     print("  'E' - Describe Current Scene (Take Image Description)")
+    print("  'A' - Force Face Detection (On-demand Recognition)")
     print("  'Space' - Emergency Alert Toggle\n")
 
     try:
@@ -211,8 +212,8 @@ def main():
                     # If it's a recognized person
                     if name != "Unknown":
                         last_greet = last_face_greeting.get(name, 0.0)
-                        if current_time - last_greet > 12.0:
-                            audio.speak(f"{name} detected", is_critical=True)
+                        if current_time - last_greet > 600.0:  # 10 minutes cooldown
+                            audio.speak(f"{name} detected", priority_level=0)
                             last_face_greeting[name] = current_time
                             logger.log_event("face_recognition", {"name": name, "confidence": face["confidence"]})
                     else:
@@ -258,7 +259,7 @@ def main():
                 # Speak the single highest-priority qualified obstacle that is not on cooldown
                 audio.speak_obstacles(sorted_obstacles, close_threshold=close_thres, critical_threshold=critical_thres)
                 
-                # Log all close and critical obstacles to caregiver reports
+                # Log all close and critical obstacles to guardian reports
                 for obs in sorted_obstacles:
                     dist = obs["distance"]
                     if dist <= close_thres:
@@ -295,7 +296,7 @@ def main():
             if reading_mode_active:
                 status_text = "VISION: YOLOv8 | FACE ID: READY | READING MODE: ACTIVE | REPORT: LOGGING"
             if emergency.active:
-                status_text = "⚠️ EMERGENCY ASSISTANCE ACTIVE - CAREGIVER NOTIFIED"
+                status_text = "⚠️ EMERGENCY ASSISTANCE ACTIVE - GUARDIAN NOTIFIED"
                 
             cv2.putText(display_frame, status_text, (15, 25), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255) if not emergency.active else (0, 0, 255), 1, cv2.LINE_AA)
@@ -373,7 +374,7 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
             # Display window frame
-            cv2.imshow('SightAssist Premium HUD', display_frame)
+            cv2.imshow('SightAssist BETA Version 0.1', display_frame)
 
             # ─────────────────────────────────────────────────────────────────
             # KEYBOARD HOTKEY ROUTER
@@ -383,6 +384,25 @@ def main():
             if key == ord('q'):
                 print("\n[MAIN] Quit requested.")
                 break
+                
+            elif key == ord('a'):
+                # On-demand face recognition (Force detection for presentation purposes)
+                print("[MAIN] Manual face detection triggered.")
+                detected_faces = face_id.recognize_faces(frame)
+                if not detected_faces:
+                    audio.speak("No faces detected", priority_level=0)
+                    print("[MAIN] No faces detected in manual trigger.")
+                else:
+                    for face in detected_faces:
+                        name = face["name"]
+                        conf = face["confidence"]
+                        print(f"[MAIN] Detected face: {name} (confidence: {conf:.2f})")
+                        if name != "Unknown":
+                            audio.speak(f"{name} detected", priority_level=0)
+                            logger.log_event("face_recognition_manual", {"name": name, "confidence": conf})
+                        else:
+                            audio.speak("Unknown person detected", priority_level=0)
+                            logger.log_event("face_recognition_manual", {"name": "Unknown", "confidence": conf})
                 
             elif key == ord('c'):
                 # Color identification
@@ -436,11 +456,11 @@ def main():
                     emergency.trigger_emergency(frame, reason="Manual Alert", audio=audio, logger=logger)
                     
             elif key == ord('r'):
-                # Generate caregiver report immediately
-                audio.speak("Generating caregiver report.")
+                # Generate guardian report immediately
+                audio.speak("Generating guardian report.")
                 md, html = logger.generate_report()
                 if md:
-                    audio.speak("Caregiver report generated.")
+                    audio.speak("Guardian report generated.")
                 else:
                     audio.speak("Report generation failed.")
                     
@@ -466,12 +486,12 @@ def main():
     
     finally:
         # Cleanup and write report
-        print("[MAIN] Cleaning up resources and generating caregiver report...")
+        print("[MAIN] Cleaning up resources and generating guardian report...")
         camera.release()
         cv2.destroyAllWindows()
         
         # Speak final shutdown sequence
-        audio.speak_sync("SightAssist system shutting down. compiling final caregiver reports.")
+        audio.speak_sync("SightAssist system shutting down. compiling final guardian reports.")
         
         # Release audio resources (stops thread, clears queue)
         audio.release()
@@ -479,7 +499,7 @@ def main():
         # Compile reports
         md_path, html_path = logger.generate_report()
         
-        print(f"[MAIN] Caregiver reports saved successfully.\nShutdown complete.")
+        print(f"[MAIN] Guardian reports saved successfully.\nShutdown complete.")
 
 if __name__ == "__main__":
     main()

@@ -64,7 +64,7 @@ class EmergencyModule:
             f"Trigger Type : {reason}\n"
             f"GPS Location : Latitude {gps_lat}, Longitude {gps_lon} (Mock Coordinates)\n"
             f"Camera Frame : {frame_filename}\n"
-            "Status       : Caregiver notified via simulated SMS and Email alert protocols.\n"
+            "Status       : Guardian notified via simulated SMS and Email alert protocols.\n"
             "-------------------------------------------\n"
         )
         
@@ -86,7 +86,7 @@ class EmergencyModule:
 
         if audio:
             audio.play_alarm(reason)
-            audio.speak("Emergency alert triggered. caregiver notified.")
+            audio.speak("Emergency alert triggered. guardian notified.")
 
     def clear_emergency(self, audio=None):
         """Clears the active emergency state."""

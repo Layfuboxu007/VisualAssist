@@ -24,6 +24,9 @@ class AudioFeedback:
         self.last_spoken = {}  # maps text to timestamp of when it was last spoken
         self.tracked_obstacles = {}  # key: (label, position) -> dict of status
         
+        # Priority level tracking
+        self.current_speaking_priority = 2
+        
         # Thread-safe PriorityQueue for background speech processing
         self.speech_queue = queue.PriorityQueue()
         self.last_speech_end_time = 0.0
@@ -50,6 +53,7 @@ class AudioFeedback:
                 if text:
                     try:
                         self.is_speaking = True
+                        self.current_speaking_priority = priority
                         
                         # Re-initialize COM on this thread for this execution
                         import ctypes
@@ -74,6 +78,7 @@ class AudioFeedback:
                         print(f"[AUDIO ERROR] Speech execution failed: {e}")
                     finally:
                         self.is_speaking = False
+                        self.current_speaking_priority = 2
                 
                 self.last_speech_end_time = time.time()
                 
@@ -111,25 +116,31 @@ class AudioFeedback:
         self.speech_queue.put((0, time.time(), text, done_event))
         done_event.wait()
 
-    def speak(self, text, is_critical=False):
+    def speak(self, text, priority_level=None, is_critical=False):
         """Speak asynchronously by adding text to priority queue.
         Enforces global silence interval and word cooldowns to prevent spam.
         """
+        if priority_level is None:
+            priority_level = 1 if is_critical else 2
+            
         current_time = time.time()
         
-        # If currently speaking, reject non-critical alerts to prevent queue backlog
-        if self.is_speaking and not is_critical:
+        # Determine if this alert is considered high-priority (level 0 or 1)
+        is_priority_alert = (priority_level <= 1)
+        
+        # If currently speaking a higher or equal priority, reject lower-priority alerts
+        if self.is_speaking and priority_level >= getattr(self, "current_speaking_priority", 2):
             return False
             
-        # Enforce global silence interval between consecutive spoken alerts (bypass for critical alerts)
-        if not is_critical:
+        # Enforce global silence interval between consecutive spoken alerts (bypass for priority 0 and 1)
+        if not is_priority_alert:
             silence_interval = self.global_silence_interval
             if current_time - self.last_speech_end_time < silence_interval:
                 return False  # Drop, within silence window
         
         # Check cooldown for this specific alert text
-        # If critical, we still check a smaller safety cooldown (6s) to prevent self-interruption and stutter
-        safety_cooldown = 6.0 if is_critical else self.cooldown
+        # If priority 0 or 1, we still check a smaller safety cooldown (6s) to prevent self-interruption and stutter
+        safety_cooldown = 6.0 if is_priority_alert else self.cooldown
         if text in self.last_spoken:
             if current_time - self.last_spoken[text] < safety_cooldown:
                 return False  # Skip, within cooldown window
@@ -137,13 +148,14 @@ class AudioFeedback:
         self.last_spoken[text] = current_time
         print(f"[AUDIO OUT (async)] {text}")
         
-        # If critical, interrupt any current speech immediately
-        if is_critical and hasattr(self, "current_engine") and self.current_engine:
-            try:
-                self.current_engine.stop()
-            except Exception:
-                pass
-            self.current_engine = None
+        # If this new alert has HIGHER priority than what is currently speaking, interrupt it!
+        if self.is_speaking and priority_level < getattr(self, "current_speaking_priority", 2):
+            if hasattr(self, "current_engine") and self.current_engine:
+                try:
+                    self.current_engine.stop()
+                except Exception:
+                    pass
+                self.current_engine = None
 
         # Clear the queue to discard any older/stale pending speech requests
         while not self.speech_queue.empty():
@@ -153,8 +165,7 @@ class AudioFeedback:
             except (queue.Empty, ValueError):
                 break
                 
-        priority = 0 if is_critical else 1
-        self.speech_queue.put((priority, time.time(), text, None))
+        self.speech_queue.put((priority_level, time.time(), text, None))
         return True
 
     def speak_obstacles(self, sorted_obstacles, close_threshold, critical_threshold):
