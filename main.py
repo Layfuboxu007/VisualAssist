@@ -31,17 +31,29 @@ def main():
 
     # 2. Initialize Audio Feedback
     audio_cfg = config.get("audio", {})
-    audio = AudioFeedback(rate=audio_cfg.get("speech_rate", 150),
+    audio = AudioFeedback(rate=audio_cfg.get("speech_rate", 125),
                           volume=audio_cfg.get("volume", 1.0),
-                          cooldown=audio_cfg.get("cooldown", 3.0))
+                          cooldown=audio_cfg.get("cooldown", 4.0),
+                          critical_cooldown=audio_cfg.get("critical_cooldown", 4.0),
+                          close_cooldown=audio_cfg.get("close_cooldown", 8.0),
+                          distance_update_threshold=audio_cfg.get("distance_update_threshold", 0.5),
+                          global_silence_interval=audio_cfg.get("global_silence_interval", 2.5),
+                          critical_silence_interval=audio_cfg.get("critical_silence_interval", 1.0))
     
     # 3. Initialize YOLO Vision Module
     ai_cfg = config.get("ai", {})
+    obs_cfg = config.get("obstacles", {})
     try:
         vision_module = YoloVision(
             model_path=ai_cfg.get("yolo_model", "yolov8n.pt"),
             backend=ai_cfg.get("yolo_backend", "pytorch"),
-            conf_thres=ai_cfg.get("confidence_threshold", 0.5)
+            conf_thres=ai_cfg.get("confidence_threshold", 0.5),
+            close_threshold=obs_cfg.get("close_threshold", 5.0),
+            critical_threshold=obs_cfg.get("critical_threshold", 2.0),
+            near_object_threshold=obs_cfg.get("near_object_threshold", 3.5),
+            camera_height=obs_cfg.get("camera_height", 1.4),
+            horizon_ratio=obs_cfg.get("horizon_ratio", 0.35),
+            hole_sensitivity=obs_cfg.get("hole_sensitivity", "medium")
         )
     except Exception as e:
         print(f"[ERROR] Failed to initialize YOLO: {e}")
@@ -83,26 +95,33 @@ def main():
                     "vehicle": 8,
                     "tricycle": 7,
                     "bicycle": 6,
-                    "pole": 5
+                    "pole": 5,
+                    "cat": 5
                 }
                 
+                # Retrieve threshold constants from config for verbal alerts
+                dist_cfg = config.get("obstacles", {})
+                close_thres = dist_cfg.get("close_threshold", 5.0)
+                critical_thres = dist_cfg.get("critical_threshold", 2.0)
+                
                 def get_priority(obs):
-                    lbl_score = label_priority.get(obs["label"], 1)
-                    pos_score = 2 if obs["position"] == "ahead" else 1
-                    return lbl_score * pos_score
+                    lbl_score = label_priority.get(obs["label"], 4)  # Default to 4 for general objects
+                    pos_score = 2.0 if obs["position"] == "ahead" else 1.0
+                    dist = obs.get("distance", 10.0)
+                    dist_factor = 10.0 / max(0.5, dist)
+                    return lbl_score * pos_score * dist_factor
 
-                # Sort obstacles so the most critical items are spoken first
+                # Sort obstacles so the most critical and closest items are spoken first
                 sorted_obstacles = sorted(obstacles, key=get_priority, reverse=True)
                 
                 for obs in sorted_obstacles:
-                    label = obs["label"]
-                    position = obs["position"]
-                    if position == "ahead":
-                        alert_phrase = f"{label.capitalize()} ahead."
-                    else:
-                        alert_phrase = f"{label.capitalize()} {position}."
-                    
-                    audio.speak(alert_phrase)
+                    audio.speak_obstacle(
+                        label=obs["label"],
+                        position=obs["position"],
+                        distance=obs.get("distance", 99.0),
+                        close_threshold=close_thres,
+                        critical_threshold=critical_thres
+                    )
                     
                 display_frame = annotated_frame
                 # Draw FPS Performance (removed PyTorch backend string)

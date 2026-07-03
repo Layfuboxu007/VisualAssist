@@ -4,12 +4,21 @@ import numpy as np
 import cv2
 
 class YoloVision:
-    def __init__(self, model_path, backend="pytorch", conf_thres=0.5):
+    def __init__(self, model_path, backend="pytorch", conf_thres=0.5,
+                 close_threshold=5.0, critical_threshold=2.0, near_object_threshold=3.5,
+                 camera_height=1.4, horizon_ratio=0.35, hole_sensitivity="medium"):
         from ultralytics import YOLO
         
         self.model_path = model_path
         self.backend = backend.lower()
         self.conf_thres = conf_thres
+        
+        self.close_threshold = close_threshold
+        self.critical_threshold = critical_threshold
+        self.near_object_threshold = near_object_threshold
+        self.H_cam = camera_height
+        self.y0_ratio = horizon_ratio
+        self.hole_sensitivity = hole_sensitivity.lower()
         
         # If ONNX is requested, adjust the path to point to .onnx if it exists
         if self.backend == "onnx":
@@ -24,6 +33,76 @@ class YoloVision:
         print(f"[YOLO] Loading model {self.model_path}...")
         self.model = YOLO(self.model_path, task='detect')
         print("[YOLO] Model loaded successfully.")
+
+    def estimate_distance(self, label, box, frame_shape):
+        """Estimate the distance of an object using bounding box height and ground projection fallbacks."""
+        h, w = frame_shape[:2]
+        x1, y1, x2, y2 = box
+        
+        # Focal length estimate (assume ~60 degree horizontal FOV, F approx width)
+        F = w
+        
+        # 1. Ground plane estimation (calibrated linear-inverse mapping)
+        # Maps y2 = h to 1.0 meter (very close), and y2 = y0 to 10.0+ meters (far away).
+        # This handles arbitrary camera tilts much better than a rigid horizontal assumption.
+        y0 = int(self.y0_ratio * h)
+        if y2 <= y0:
+            d_ground = 100.0
+        else:
+            y_norm = (y2 - y0) / (h - y0)
+            y_norm = np.clip(y_norm, 0.01, 1.0)
+            d_ground = 1.0 + 2.0 * (1.0 - y_norm) / y_norm
+        
+        # 2. Bounding box height size-based estimation
+        real_heights = {
+            "person": 1.7,
+            "vehicle": 1.6,
+            "tricycle": 1.5,
+            "bicycle": 1.0,
+            "pole": 2.5,
+            "hole": 0.5,
+            
+            "chair": 0.8,
+            "couch": 0.8,
+            "bed": 0.6,
+            "dining table": 0.75,
+            "toilet": 0.75,
+            "bench": 0.8,
+            
+            "dog": 0.5,
+            "cat": 0.3,
+            "horse": 1.5,
+            "sheep": 0.8,
+            "cow": 1.4,
+            "elephant": 2.5,
+            "bear": 1.5,
+            "zebra": 1.4,
+            "giraffe": 4.0,
+            
+            "fire hydrant": 0.8,
+            "stop sign": 1.0,
+            "parking meter": 1.2,
+            "traffic light": 1.5,
+            
+            "suitcase": 0.7,
+            "backpack": 0.5,
+            "handbag": 0.3,
+            "umbrella": 1.0,
+        }
+        
+        real_h = real_heights.get(label, 1.0)
+        box_h = max(1, y2 - y1)
+        d_size = (real_h * F) / box_h
+        
+        if label == "hole":
+            distance = d_ground
+        else:
+            # We take the minimum of both to be safe and conservative.
+            # E.g. if the object is cut off at the top (head cropped), the bottom ground projection remains accurate.
+            # If the object's bottom is cut off, the size-based estimation helps.
+            distance = min(d_ground, d_size)
+            
+        return max(0.1, min(100.0, float(distance)))
 
     def get_spatial_position(self, box, width):
         """Determine if an object is on the left, ahead, or on the right."""
@@ -61,15 +140,16 @@ class YoloVision:
         
         for contour in contours:
             x, y, cw, ch = cv2.boundingRect(contour)
-            # Poles are vertical: high height-to-width ratio, relatively thin and tall
-            if ch > 60 and cw < 45 and (ch / cw) > 4.5:
-                # Spanning from middle to bottom region
-                if y + ch > h * 0.3 and y < h * 0.9:
-                    box = [x, y, x + cw, y + ch]
-                    if not self.is_overlapping(box, yolo_boxes):
-                        poles.append(box)
-                        if len(poles) >= 3:  # Limit detections to avoid HUD clutter
-                            break
+            # Poles are vertical, thin and tall, but not extremely thin line borders (like door frames)
+            if ch > 60 and 5 <= cw < 40 and 4.5 < (ch / cw) < 12.0:
+                # Standalone poles on ground must start in mid-to-lower region, and not span the whole image height
+                if y > h * 0.2 and ch < h * 0.7:
+                    if y + ch > h * 0.35 and y < h * 0.85:
+                        box = [x, y, x + cw, y + ch]
+                        if not self.is_overlapping(box, yolo_boxes):
+                            poles.append(box)
+                            if len(poles) >= 3:  # Limit detections to avoid HUD clutter
+                                break
         return poles
 
     def detect_holes(self, frame, yolo_boxes):
@@ -85,9 +165,27 @@ class YoloVision:
         gray = cv2.cvtColor(road_roi, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (9, 9), 0)
         
-        # Calculate dark threshold dynamically relative to the local average road intensity
+        # Calculate standard deviation and mean road intensity
         road_mean = np.mean(blur)
-        thresh_val = max(10, int(road_mean - 35))
+        road_std = np.std(blur)
+        
+        # Adjust offset based on hole_sensitivity setting and road standard deviation
+        # Higher standard deviation = more noisy/textured floor -> use larger offset
+        if self.hole_sensitivity == "high":
+            base_offset = 35
+            std_mult = 1.0
+        elif self.hole_sensitivity == "low":
+            base_offset = 65  # Increased from 55 to be more conservative
+            std_mult = 2.0
+        elif self.hole_sensitivity == "very_low":
+            base_offset = 80
+            std_mult = 2.5
+        else:  # "medium" or default
+            base_offset = 50  # Increased from 45
+            std_mult = 1.5
+            
+        offset = max(base_offset, int(road_std * std_mult))
+        thresh_val = max(10, int(road_mean - offset))
         _, thresh = cv2.threshold(blur, thresh_val, 255, cv2.THRESH_BINARY_INV)
         
         # Merge fragment contours
@@ -99,14 +197,29 @@ class YoloVision:
         
         for contour in contours:
             area = cv2.contourArea(contour)
-            if 150 < area < 8000:
-                x, y, cw, ch = cv2.boundingRect(contour)
+            x, y, cw, ch = cv2.boundingRect(contour)
+            
+            # Filter out wall shadows and side boundaries (like door borders)
+            if x < w * 0.1 or x + cw > w * 0.9:
+                continue
+                
+            # Dynamic minimum area based on vertical position (closer must be larger to filter small specks)
+            y2_full = y + ch + road_y_start
+            y_norm = (y2_full - road_y_start) / (h - road_y_start) if h > road_y_start else 0.0
+            y_norm = np.clip(y_norm, 0.0, 1.0)
+            
+            # Dynamic min area: from 400 (far) to 2000 (very close)
+            dynamic_min_area = 400 + (y_norm ** 2) * 1600
+            
+            if dynamic_min_area < area < 8000:
                 # Holes on the ground map as flat horizontal ellipses (width > height) due to perspective
-                if cw / ch > 1.2:
+                aspect_ratio = cw / ch if ch > 0 else 0
+                if 1.4 < aspect_ratio < 4.0:  # Tightened aspect ratio bounds
                     hull = cv2.convexHull(contour)
                     hull_area = cv2.contourArea(hull)
                     solidity = area / hull_area if hull_area > 0 else 0
-                    if solidity > 0.6:
+                    # A real pothole/opening is solid/convex
+                    if solidity > 0.85:  # Increased from 0.80 to reduce false positives
                         # Translate ROI coordinates back to full frame
                         box = [x, y + road_y_start, x + cw, y + ch + road_y_start]
                         if not self.is_overlapping(box, yolo_boxes):
@@ -130,6 +243,18 @@ class YoloVision:
         yolo_boxes = []
         
         vehicle_classes = {"car", "truck", "bus"}
+        
+        # Target general objects to report when they are near (D < self.near_object_threshold)
+        general_obstacle_classes = {
+            # Animals
+            "dog", "cat", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+            # Furniture / large items
+            "chair", "couch", "bed", "dining table", "toilet", "bench", "potted plant",
+            # Outdoor features
+            "fire hydrant", "stop sign", "parking meter", "traffic light",
+            # Luggage / bags
+            "suitcase", "backpack", "handbag", "umbrella"
+        }
 
         # 2. Extract and map YOLO boxes
         for box in results[0].boxes:
@@ -142,48 +267,69 @@ class YoloVision:
             yolo_boxes.append([x1, y1, x2, y2])
             
             mapped_label = None
+            is_primary = False
+            
             if raw_name == "person":
                 mapped_label = "person"
+                is_primary = True
             elif raw_name in vehicle_classes:
                 mapped_label = "vehicle"
+                is_primary = True
             elif raw_name == "motorcycle":
-                # Tricycle heuristic: if it has a wide aspect ratio (width / height > 0.85)
                 wb = x2 - x1
                 hb = y2 - y1
                 mapped_label = "tricycle" if (hb > 0 and (wb / hb) > 0.85) else "vehicle"
+                is_primary = True
             elif raw_name == "bicycle":
                 wb = x2 - x1
                 hb = y2 - y1
                 mapped_label = "tricycle" if (hb > 0 and (wb / hb) > 0.85) else "bicycle"
+                is_primary = True
+            elif raw_name == "cat":
+                mapped_label = "cat"
+                is_primary = True
+            elif raw_name in general_obstacle_classes:
+                mapped_label = raw_name
+                is_primary = False
                 
             if mapped_label:
-                pos = self.get_spatial_position([x1, y1, x2, y2], w)
-                detected_obstacles.append({
-                    "label": mapped_label,
-                    "position": pos,
-                    "box": [x1, y1, x2, y2],
-                    "confidence": conf
-                })
+                # Estimate distance
+                dist = self.estimate_distance(mapped_label, [x1, y1, x2, y2], frame.shape)
+                
+                # Keep primary classes always, and general objects only if they are near
+                if is_primary or (dist <= self.near_object_threshold):
+                    pos = self.get_spatial_position([x1, y1, x2, y2], w)
+                    detected_obstacles.append({
+                        "label": mapped_label,
+                        "position": pos,
+                        "box": [x1, y1, x2, y2],
+                        "confidence": conf,
+                        "distance": dist
+                    })
 
         # 3. Detect custom obstacles (Poles and Holes)
         poles = self.detect_poles(frame, yolo_boxes)
         for box in poles:
             pos = self.get_spatial_position(box, w)
+            dist = self.estimate_distance("pole", box, frame.shape)
             detected_obstacles.append({
                 "label": "pole",
                 "position": pos,
                 "box": box,
-                "confidence": 0.70
+                "confidence": 0.70,
+                "distance": dist
             })
 
         holes = self.detect_holes(frame, yolo_boxes)
         for box in holes:
             pos = self.get_spatial_position(box, w)
+            dist = self.estimate_distance("hole", box, frame.shape)
             detected_obstacles.append({
                 "label": "hole",
                 "position": pos,
                 "box": box,
-                "confidence": 0.75
+                "confidence": 0.75,
+                "distance": dist
             })
 
         # 4. Premium Drawing Overlays
@@ -194,32 +340,46 @@ class YoloVision:
             "tricycle": (182, 89, 155),  # Purple (BGR)
             "bicycle": (156, 188, 26),   # Turquoise (BGR)
             "pole": (15, 196, 241),      # Yellow (BGR)
-            "hole": (60, 76, 231)        # Red (BGR)
+            "hole": (60, 76, 231),       # Red (BGR)
+            "cat": (74, 195, 236)        # Warm Amber/Yellow (BGR)
         }
 
         for obs in detected_obstacles:
             label = obs["label"]
             pos = obs["position"]
             x1, y1, x2, y2 = obs["box"]
-            color = color_map.get(label, (0, 255, 0))
+            dist = obs.get("distance", 99.0)
+            
+            # Determine BGR color and thickness based on critical status (distance < self.critical_threshold)
+            is_critical = dist < self.critical_threshold
+            if is_critical:
+                color = (0, 0, 255)  # Vibrant Warning Red
+                thickness = 3
+            else:
+                # For custom/general obstacles, default to a cool Amber/Orange (0, 165, 255)
+                color = color_map.get(label, (0, 165, 255))
+                thickness = 2
             
             # Standard rectangle outline
-            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
             
             # High-end corner markers
             length = min(15, (x2 - x1) // 4, (y2 - y1) // 4)
             if length > 0:
-                cv2.line(annotated_frame, (x1, y1), (x1 + length, y1), color, 4)
-                cv2.line(annotated_frame, (x1, y1), (x1, y1 + length), color, 4)
-                cv2.line(annotated_frame, (x2, y1), (x2 - length, y1), color, 4)
-                cv2.line(annotated_frame, (x2, y1), (x2, y1 + length), color, 4)
-                cv2.line(annotated_frame, (x1, y2), (x1 + length, y2), color, 4)
-                cv2.line(annotated_frame, (x1, y2), (x1, y2 - length), color, 4)
-                cv2.line(annotated_frame, (x2, y2), (x2 - length, y2), color, 4)
-                cv2.line(annotated_frame, (x2, y2), (x2, y2 - length), color, 4)
+                cv2.line(annotated_frame, (x1, y1), (x1 + length, y1), color, thickness + 2)
+                cv2.line(annotated_frame, (x1, y1), (x1, y1 + length), color, thickness + 2)
+                cv2.line(annotated_frame, (x2, y1), (x2 - length, y1), color, thickness + 2)
+                cv2.line(annotated_frame, (x2, y1), (x2, y1 + length), color, thickness + 2)
+                cv2.line(annotated_frame, (x1, y2), (x1 + length, y2), color, thickness + 2)
+                cv2.line(annotated_frame, (x1, y2), (x1, y2 - length), color, thickness + 2)
+                cv2.line(annotated_frame, (x2, y2), (x2 - length, y2), color, thickness + 2)
+                cv2.line(annotated_frame, (x2, y2), (x2, y2 - length), color, thickness + 2)
             
-            # Overlay Text Label
-            text = f"{label.upper()} ({pos})"
+            # Overlay Text Label with distance
+            dist_str = f" | {dist:.1f}m" if dist < 100.0 else ""
+            warning_prefix = "CRITICAL: " if is_critical else ""
+            text = f"{warning_prefix}{label.upper()} ({pos}){dist_str}"
+            
             (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(annotated_frame, (x1, y1 - th - 8), (x1 + tw + 6, y1), color, -1)
             cv2.putText(annotated_frame, text, (x1 + 3, y1 - 4),

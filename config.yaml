@@ -5,12 +5,27 @@ cameras:
     height: 720
 
 audio:
-  speech_rate: 150  # Words per minute
+  speech_rate: 125  # Words per minute (slower and calmer)
   volume: 1.0       # 0.0 to 1.0
-  cooldown: 3.0     # Time (seconds) between repeating same alert
+  cooldown: 4.0     # Time (seconds) between repeating same alert
+  critical_cooldown: 4.0   # Seconds between repeating critical alerts for the same object
+  close_cooldown: 8.0     # Seconds between repeating close alerts for the same object
+  distance_update_threshold: 0.5  # Alert if object gets closer by this many meters
+  global_silence_interval: 2.5    # Global silence between any two alerts
+  critical_silence_interval: 1.0  # Silence window for critical alerts
 
 # AI inference settings (YOLO)
 ai:
   yolo_model: "models/yolov8n.pt"
   yolo_backend: "pytorch"   # Options: "pytorch", "onnx"
   confidence_threshold: 0.5
+
+# Obstacle detection & distance settings
+obstacles:
+  close_threshold: 5.0      # Distance (m) to start reporting distance
+  critical_threshold: 2.0   # Distance (m) for critical warning (closer)
+  near_object_threshold: 3.5 # Distance (m) to report general near objects
+  camera_height: 1.4        # Estimated camera height in meters
+  horizon_ratio: 0.35       # Estimated horizon position (0.0 to 1.0 of frame height)
+  hole_sensitivity: "very_low" # Sensitivity for hole detection: "high", "medium", "low", "very_low"
+
